@@ -321,14 +321,11 @@ private:
             long double multiplier = u_ik / pivot;
             L.set(action.modified_row, action.pivot_row, multiplier);
 
-            // Обновляем только элементы справа от диагонали
+            // Обновляем все элементы в строке, включая элементы ниже диагонали
             for (int j : action.affected_columns) {
-                if (j > action.pivot_row) {
-                    long double delta = multiplier * U.get(action.pivot_row, j);
-                    if (U.get(action.modified_row, j)) {
-                        U.set(action.modified_row, j, 
-                            U.get(action.modified_row, j) - delta);
-                    }
+                long double delta = multiplier * U.get(action.pivot_row, j);
+                if (U.get(action.modified_row, j)) {
+                    U.set(action.modified_row, j, U.get(action.modified_row, j) - delta);
                 }
             }
         }
@@ -521,17 +518,97 @@ int main() {
     duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
     std::cout << "\nВремя полного разложения: " << duration.count() << " микросекунд\n";
     
+    std::cout << "\nМатрица L (полное разложение):\n";
+    ans4.first.printDense(6);
+    std::cout << "\nМатрица U (полное разложение):\n";
+    ans4.second.printDense(6);
+    
     // Быстрое разложение
     start_time = std::chrono::high_resolution_clock::now();
     auto ans4_fast = D.luDecomposition(true);
     end_time = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-    std::cout << "Время быстрого разложения: " << duration.count() << " микросекунд\n";
+    std::cout << "\nВремя быстрого разложения: " << duration.count() << " микросекунд\n";
     
-    std::cout << "\nМатрица L:\n";
-    ans4.first.printDense(6);
-    std::cout << "\nМатрица U:\n";
-    ans4.second.printDense(6);
+    std::cout << "\nМатрица L (быстрое разложение):\n";
+    ans4_fast.first.printDense(6);
+    std::cout << "\nМатрица U (быстрое разложение):\n";
+    ans4_fast.second.printDense(6);
+
+    // Тест 5: Сравнение производительности для матриц с одинаковой структурой
+    std::cout << "\nТест 5: Сравнение производительности для матриц с одинаковой структурой\n";
+    
+    // Первая матрица (как в тесте 4)
+    Matrix E(10, 10);
+    E.saveAsCSR({
+        {2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {1.0, 2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0},
+        {1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0},
+        {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 1.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0}
+    });
+
+    std::cout << "Первая матрица E:\n";
+    E.printDense(6);
+
+    // Полное разложение первой матрицы
+    start_time = std::chrono::high_resolution_clock::now();
+    auto ans5 = E.luDecomposition();
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    std::cout << "\nВремя полного разложения первой матрицы: " << duration.count() << " микросекунд\n";
+    
+    std::cout << "\nМатрица L (первая матрица, полное разложение):\n";
+    ans5.first.printDense(6);
+    std::cout << "\nМатрица U (первая матрица, полное разложение):\n";
+    ans5.second.printDense(6);
+
+    // Вторая матрица с той же структурой, но другими данными
+    Matrix F(10, 10);
+    F.saveAsCSR({
+        {3.0, 2.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {2.0, 3.0, 2.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 2.0, 3.0, 2.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0},
+        {2.0, 0.0, 2.0, 3.0, 2.0, 0.0, 2.0, 0.0, 0.0, 0.0},
+        {0.0, 2.0, 0.0, 2.0, 3.0, 2.0, 0.0, 2.0, 0.0, 0.0},
+        {0.0, 0.0, 2.0, 0.0, 2.0, 3.0, 2.0, 0.0, 2.0, 0.0},
+        {0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 3.0, 2.0, 0.0, 2.0},
+        {0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 3.0, 2.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 3.0, 2.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 3.0}
+    });
+
+    std::cout << "\nВторая матрица F:\n";
+    F.printDense(6);
+
+    // Полное разложение второй матрицы
+    start_time = std::chrono::high_resolution_clock::now();
+    auto ans6 = F.luDecomposition();
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    std::cout << "\nВремя полного разложения второй матрицы: " << duration.count() << " микросекунд\n";
+    
+    std::cout << "\nМатрица L (вторая матрица, полное разложение):\n";
+    ans6.first.printDense(6);
+    std::cout << "\nМатрица U (вторая матрица, полное разложение):\n";
+    ans6.second.printDense(6);
+
+    // Быстрое разложение второй матрицы
+    start_time = std::chrono::high_resolution_clock::now();
+    auto ans6_fast = F.luDecomposition(true);
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    std::cout << "\nВремя быстрого разложения второй матрицы: " << duration.count() << " микросекунд\n";
+    
+    std::cout << "\nМатрица L (вторая матрица, быстрое разложение):\n";
+    ans6_fast.first.printDense(6);
+    std::cout << "\nМатрица U (вторая матрица, быстрое разложение):\n";
+    ans6_fast.second.printDense(6);
 
     return 0;
 }
