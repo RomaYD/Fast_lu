@@ -195,7 +195,9 @@ public:
     std::pair<Matrix, Matrix> luDecomposition(bool use_saved = false) {
         if (rows != cols) throw std::invalid_argument("Matrix must be square");
 
-        convertToCSR();
+        if (!is_csr_current) {
+            update_csr();
+        }
 
         if (use_saved && !symbolic_pattern.actions.empty()) {
             return perform_fast_lu();
@@ -303,6 +305,11 @@ private:
         Matrix L(rows, cols);
         Matrix U = *this;
 
+        // Устанавливаем диагональные элементы L равными 1
+        for (int i = 0; i < rows; ++i) {
+            L.set(i, i, 1.0);
+        }
+
         // Применяем все действия из символьной схемы
         for (const auto& action : symbolic_pattern.actions) {
             long double u_ik = U.get(action.modified_row, action.pivot_row);
@@ -314,18 +321,16 @@ private:
             long double multiplier = u_ik / pivot;
             L.set(action.modified_row, action.pivot_row, multiplier);
 
+            // Обновляем только элементы справа от диагонали
             for (int j : action.affected_columns) {
-                long double delta = multiplier * U.get(action.pivot_row, j);
-                if (U.get(action.modified_row, j)) {
-                    U.set(action.modified_row, j, 
-                        U.get(action.modified_row, j) - delta);
+                if (j > action.pivot_row) {
+                    long double delta = multiplier * U.get(action.pivot_row, j);
+                    if (U.get(action.modified_row, j)) {
+                        U.set(action.modified_row, j, 
+                            U.get(action.modified_row, j) - delta);
+                    }
                 }
             }
-        }
-
-        // Устанавливаем диагональные элементы L равными 1
-        for (int i = 0; i < rows; ++i) {
-            L.set(i, i, 1.0);
         }
 
         return { L, U };
