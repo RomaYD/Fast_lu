@@ -65,9 +65,9 @@ private:
         for (int i = 0; i < rows; ++i) {
             for (const auto& p : LIL[i]) {
                 if (p.first >= 0 && p.first < cols) {
-                    csr_data.push_back(p.second);
-                    csr_col_indices.push_back(p.first);
-                    csr_row_ptr[i + 1]++;
+                csr_data.push_back(p.second);
+                csr_col_indices.push_back(p.first);
+                csr_row_ptr[i + 1]++;
                 }
             }
         }
@@ -218,6 +218,42 @@ public:
         }
     }
 
+    // Умножение матриц
+    Matrix multiply(const Matrix& other) const {
+        if (cols != other.rows) {
+            throw std::invalid_argument("Matrix dimensions do not match for multiplication");
+        }
+        
+        Matrix result(rows, other.cols);
+        
+        for (int i = 0; i < rows; ++i) {
+            for (int j = 0; j < other.cols; ++j) {
+                long double sum = 0.0;
+                for (int k = 0; k < cols; ++k) {
+                    sum += get(i, k) * other.get(k, j);
+                }
+                if (sum != 0) {
+                    result.set(i, j, sum);
+                }
+            }
+        }
+        
+        return result;
+    }
+
+    // Проверка LU-разложения
+    bool checkLUDecomposition(const Matrix& L, const Matrix& U) const {
+        Matrix product = L.multiply(U);
+        for (int i = 0; i < rows; ++i) {
+            for (int j = 0; j < cols; ++j) {
+                if (std::abs(product.get(i, j) - get(i, j)) > 1e-10) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
 private:
     // Полное LU-разложение
     std::pair<Matrix, Matrix> perform_full_lu() {
@@ -240,60 +276,42 @@ private:
                 continue;
             }
 
-            for (int i = k + 1; i < rows; ++i) {
-                long double u_ik = U.get(i, k);
-                if (u_ik == 0) continue;
-
-                std::vector<int> affected_cols;
-                for (int j = k; j < cols; ++j) {
-                    if (U.get(i, j) || U.get(k, j)) {
-                        affected_cols.push_back(j);
-                    }
-                }
-
-                SymbolicAction action(i, k, affected_cols);
-                symbolic_pattern.actions.push_back(action);
-
-                long double multiplier = u_ik / pivot;
-                L.set(i, k, multiplier);
-
-                for (int j : affected_cols) {
-                    long double delta = multiplier * U.get(k, j);
-                    if (U.get(i, j)) {
-                        U.set(i, j, U.get(i, j) - delta);
-                    }
+            // Собираем столбцы, которые будут изменены в текущем шаге
+            std::vector<int> affected_cols;
+            for (int j = k; j < cols; ++j) {
+                if (U.get(k, j) != 0) {
+                    affected_cols.push_back(j);
                 }
             }
-        }
 
-        // Обработка неустойчивых столбцов
-        for (int k : symbolic_pattern.unstable_columns) {
+            // Классическое LU-разложение по Гауссу
             for (int i = k + 1; i < rows; ++i) {
                 long double u_ik = U.get(i, k);
-                if (u_ik == 0) continue;
+                if (std::abs(u_ik) < STABILITY_THRESHOLD) continue;
 
-                long double pivot = U.get(k, k);
-                if (pivot == 0) continue;
-
-                std::vector<int> affected_cols;
-                for (int j = k; j < cols; ++j) {
-                    if (U.get(i, j) || U.get(k, j)) {
-                        affected_cols.push_back(j);
-                    }
-                }
-
-                SymbolicAction action(i, k, affected_cols);
-                symbolic_pattern.actions.push_back(action);
-
+                // Вычисляем множитель
                 long double multiplier = u_ik / pivot;
                 L.set(i, k, multiplier);
 
+                // Обновляем элементы в строке i
                 for (int j : affected_cols) {
-                    long double delta = multiplier * U.get(k, j);
-                    if (U.get(i, j)) {
-                        U.set(i, j, U.get(i, j) - delta);
+                    long double u_kj = U.get(k, j);
+                    if (std::abs(u_kj) < STABILITY_THRESHOLD) continue;
+                    
+                    long double u_ij = U.get(i, j);
+                    long double delta = multiplier * u_kj;
+                    long double new_value = u_ij - delta;
+                    
+                    // Проверяем на численную устойчивость
+                    if (std::abs(new_value) < STABILITY_THRESHOLD) {
+                        U.set(i, j, 0.0);
+                    } else {
+                        U.set(i, j, new_value);
                     }
                 }
+
+                // Сохраняем действие для быстрого разложения
+                symbolic_pattern.actions.emplace_back(i, k, affected_cols);
             }
         }
 
@@ -313,19 +331,28 @@ private:
         // Применяем все действия из символьной схемы
         for (const auto& action : symbolic_pattern.actions) {
             long double u_ik = U.get(action.modified_row, action.pivot_row);
-            if (u_ik == 0) continue;
+            if (std::abs(u_ik) < STABILITY_THRESHOLD) continue;
 
             long double pivot = U.get(action.pivot_row, action.pivot_row);
-            if (pivot == 0) continue;
+            if (std::abs(pivot) < STABILITY_THRESHOLD) continue;
 
             long double multiplier = u_ik / pivot;
             L.set(action.modified_row, action.pivot_row, multiplier);
 
-            // Обновляем все элементы в строке, включая элементы ниже диагонали
+            // Обновляем только те элементы, которые указаны в affected_columns
             for (int j : action.affected_columns) {
-                long double delta = multiplier * U.get(action.pivot_row, j);
-                if (U.get(action.modified_row, j)) {
-                    U.set(action.modified_row, j, U.get(action.modified_row, j) - delta);
+                long double u_kj = U.get(action.pivot_row, j);
+                if (std::abs(u_kj) < STABILITY_THRESHOLD) continue;
+                
+                long double u_ij = U.get(action.modified_row, j);
+                long double delta = multiplier * u_kj;
+                long double new_value = u_ij - delta;
+                
+                // Проверяем на численную устойчивость
+                if (std::abs(new_value) < STABILITY_THRESHOLD) {
+                    U.set(action.modified_row, j, 0.0);
+                } else {
+                    U.set(action.modified_row, j, new_value);
                 }
             }
         }
@@ -363,7 +390,7 @@ private:
             for (int i = 0; i < rows && i < LIL.size(); ++i) {
                 for (const auto& p : LIL[i]) {
                     if (p.first >= 0 && p.first < cols) {
-                        dense[i][p.first] = p.second;
+                    dense[i][p.first] = p.second;
                     }
                 }
             }
@@ -416,6 +443,14 @@ int main() {
     std::cout << "\nМатрица U:\n";
     ans.second.printDense(6);
 
+    // Проверка LU-разложения
+    std::cout << "\nПроверка LU-разложения (матрица A): " 
+              << (A.checkLUDecomposition(ans.first, ans.second) ? "Успешно" : "Ошибка") << "\n";
+    
+    // После быстрого разложения матрицы A:
+    std::cout << "Проверка быстрого LU-разложения (матрица A): " 
+              << (A.checkLUDecomposition(ans_fast.first, ans_fast.second) ? "Успешно" : "Ошибка") << "\n";
+
     // Тест 2: Разреженная матрица с несколькими ненулевыми элементами
     Matrix B(10, 10);
     B.saveAsCSR({
@@ -454,6 +489,14 @@ int main() {
     std::cout << "\nМатрица U:\n";
     ans2.second.printDense(6);
 
+    // Проверка LU-разложения
+    std::cout << "\nПроверка LU-разложения (матрица B): " 
+              << (B.checkLUDecomposition(ans2.first, ans2.second) ? "Успешно" : "Ошибка") << "\n";
+    
+    // После быстрого разложения матрицы B:
+    std::cout << "Проверка быстрого LU-разложения (матрица B): " 
+              << (B.checkLUDecomposition(ans2_fast.first, ans2_fast.second) ? "Успешно" : "Ошибка") << "\n";
+
     // Тест 3: Разреженная матрица с численно неустойчивыми элементами
     Matrix C(10, 10);
     C.saveAsCSR({
@@ -491,6 +534,14 @@ int main() {
     ans3.first.printDense(6);
     std::cout << "\nМатрица U:\n";
     ans3.second.printDense(6);
+
+    // Проверка LU-разложения
+    std::cout << "\nПроверка LU-разложения (матрица C): " 
+              << (C.checkLUDecomposition(ans3.first, ans3.second) ? "Успешно" : "Ошибка") << "\n";
+    
+    // После быстрого разложения матрицы C:
+    std::cout << "Проверка быстрого LU-разложения (матрица C): " 
+              << (C.checkLUDecomposition(ans3_fast.first, ans3_fast.second) ? "Успешно" : "Ошибка") << "\n";
 
     // Тест 4: Более заполненная разреженная матрица
     Matrix D(10, 10);
@@ -535,6 +586,14 @@ int main() {
     std::cout << "\nМатрица U (быстрое разложение):\n";
     ans4_fast.second.printDense(6);
 
+    // Проверка LU-разложения
+    std::cout << "\nПроверка LU-разложения (матрица D): " 
+              << (D.checkLUDecomposition(ans4.first, ans4.second) ? "Успешно" : "Ошибка") << "\n";
+    
+    // После быстрого разложения матрицы D:
+    std::cout << "Проверка быстрого LU-разложения (матрица D): " 
+              << (D.checkLUDecomposition(ans4_fast.first, ans4_fast.second) ? "Успешно" : "Ошибка") << "\n";
+
     // Тест 5: Сравнение производительности для матриц с одинаковой структурой
     std::cout << "\nТест 5: Сравнение производительности для матриц с одинаковой структурой\n";
     
@@ -568,6 +627,10 @@ int main() {
     std::cout << "\nМатрица U (первая матрица, полное разложение):\n";
     ans5.second.printDense(6);
 
+    // Проверка LU-разложения
+    std::cout << "\nПроверка LU-разложения (матрица E): " 
+              << (E.checkLUDecomposition(ans5.first, ans5.second) ? "Успешно" : "Ошибка") << "\n";
+
     // Вторая матрица с той же структурой, но другими данными
     Matrix F(10, 10);
     F.saveAsCSR({
@@ -586,7 +649,23 @@ int main() {
     std::cout << "\nВторая матрица F:\n";
     F.printDense(6);
 
-    // Полное разложение второй матрицы
+    // Быстрое разложение второй матрицы, используя структуру от матрицы E
+    start_time = std::chrono::high_resolution_clock::now();
+    auto ans6_fast = F.luDecomposition(true);
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    std::cout << "\nВремя быстрого разложения второй матрицы: " << duration.count() << " микросекунд\n";
+    
+    std::cout << "\nМатрица L (вторая матрица, быстрое разложение):\n";
+    ans6_fast.first.printDense(6);
+    std::cout << "\nМатрица U (вторая матрица, быстрое разложение):\n";
+    ans6_fast.second.printDense(6);
+
+    // Проверка быстрого LU-разложения
+    std::cout << "Проверка быстрого LU-разложения (матрица F): " 
+              << (F.checkLUDecomposition(ans6_fast.first, ans6_fast.second) ? "Успешно" : "Ошибка") << "\n";
+
+    // Полное разложение второй матрицы (для сравнения)
     start_time = std::chrono::high_resolution_clock::now();
     auto ans6 = F.luDecomposition();
     end_time = std::chrono::high_resolution_clock::now();
@@ -598,17 +677,9 @@ int main() {
     std::cout << "\nМатрица U (вторая матрица, полное разложение):\n";
     ans6.second.printDense(6);
 
-    // Быстрое разложение второй матрицы
-    start_time = std::chrono::high_resolution_clock::now();
-    auto ans6_fast = F.luDecomposition(true);
-    end_time = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-    std::cout << "\nВремя быстрого разложения второй матрицы: " << duration.count() << " микросекунд\n";
-    
-    std::cout << "\nМатрица L (вторая матрица, быстрое разложение):\n";
-    ans6_fast.first.printDense(6);
-    std::cout << "\nМатрица U (вторая матрица, быстрое разложение):\n";
-    ans6_fast.second.printDense(6);
+    // Проверка полного LU-разложения
+    std::cout << "\nПроверка полного LU-разложения (матрица F): " 
+              << (F.checkLUDecomposition(ans6.first, ans6.second) ? "Успешно" : "Ошибка") << "\n";
 
     return 0;
 }
