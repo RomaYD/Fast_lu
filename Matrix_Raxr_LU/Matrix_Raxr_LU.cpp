@@ -242,8 +242,6 @@ public:
         std::pair<struct_of_decomp, struct_of_decomp> struc;
         std::vector<std::vector<long long>> struct_of_decomposition_L(3);
         std::vector<std::vector<long long>> struct_of_decomposition_U(3);
-        struc.first.data.resize(matrix.csr_data.size() * 2);
-        struc.second.data.resize(matrix.csr_data.size() * 2);
 
         // Инициализация L единичной матрицей
         for (int i = 0; i < matrix.rows; ++i) {
@@ -288,7 +286,7 @@ public:
                     while (insert_pos < U.csr_row_ptr[k + 1] && U.csr_col_indices[insert_pos] < k) {
                         insert_pos++;
                     }
-                    struc.second.data.insert(struc.second.data.begin() + insert_pos, { pivot_ind_U });
+                    struc.second.data.push_back({ insert_pos, pivot_ind_U });
                     U.csr_data.insert(U.csr_data.begin() + insert_pos, pivot);
                     U.csr_col_indices.insert(U.csr_col_indices.begin() + insert_pos, k);
                     for (int row = k + 1; row <= matrix.rows; ++row) {
@@ -318,7 +316,7 @@ public:
                     while (insert_pos < L.csr_row_ptr[i + 1] && L.csr_col_indices[insert_pos] < k) {
                         insert_pos++;
                     }
-                    struc.first.data.insert(struc.first.data.begin() + insert_pos, { pivot_ind_U, j_of_u_ik });
+                    struc.first.data.push_back({insert_pos, pivot_ind_U, j_of_u_ik });
                     L.csr_data.insert(L.csr_data.begin() + insert_pos, factor);
                     L.csr_col_indices.insert(L.csr_col_indices.begin() + insert_pos, k);
                     for (int row = i + 1; row <= matrix.rows; ++row) {
@@ -337,7 +335,7 @@ public:
                             for (int m = U.csr_row_ptr[i]; m < U.csr_row_ptr[i + 1]; ++m) {
                                 if (U.csr_col_indices[m] == col) {
                                     U.csr_data[m] -= factor * u_kj;
-                                    struc.second.data.insert(struc.second.data.begin() + m, { pivot_ind_U, j_of_u_ik, j_of_u_kj });
+                                    struc.second.data.push_back({m, pivot_ind_U, j_of_u_ik, j_of_u_kj, 1});
                                     found = true;
                                     break;
                                 }
@@ -349,7 +347,7 @@ public:
                                 while (insert_pos < U.csr_row_ptr[i + 1] && U.csr_col_indices[insert_pos] < col) {
                                     insert_pos++;
                                 }
-                                struc.second.data.insert(struc.second.data.begin() + insert_pos, { pivot_ind_U, j_of_u_ik, j_of_u_kj });
+                                struc.second.data.push_back({insert_pos, pivot_ind_U, j_of_u_ik, j_of_u_kj, 0});
                                 U.csr_data.insert(U.csr_data.begin() + insert_pos, -factor * u_kj);
                                 U.csr_col_indices.insert(U.csr_col_indices.begin() + insert_pos, col);
                                 for (int row = i + 1; row <= matrix.rows; ++row) {
@@ -357,12 +355,14 @@ public:
                                 }
                             }
                         }
+                        if (struc.second.data.size() == 6)
+                            int a = 1 + 1;
                     }
 
                     // Удаляем элемент U[i][k]
                     for (int j = U.csr_row_ptr[i]; j < U.csr_row_ptr[i + 1]; ++j) {
                         if (U.csr_col_indices[j] == k) {
-                            struc.second.data.erase(struc.second.data.begin() + j);
+                            struc.second.data.push_back({j});
                             U.csr_data.erase(U.csr_data.begin() + j);
                             U.csr_col_indices.erase(U.csr_col_indices.begin() + j);
                             for (int row = i + 1; row <= matrix.rows; ++row) {
@@ -387,142 +387,89 @@ public:
     }
 
     // Быстрое LU разложение с использованием структуры предыдущего разложения
-    /*friend std::pair<std::pair<Matrix, Matrix>, std::vector<NumericalInstability>> FastLUDecomposition(
-        const Matrix& matrix, 
-        const std::vector<LUDecompositionStep>& previous_steps) {
-        
-        if (matrix.rows != matrix.cols) {
-            throw std::invalid_argument("Матрица должна быть квадратной для LU разложения");
-        }
-
+    friend std::pair<Matrix, Matrix> FastLUDecomposition(const Matrix& matrix, const std::pair<struct_of_decomp, struct_of_decomp> previous_steps) 
+    {
         Matrix L(matrix.rows, matrix.cols);
         Matrix U(matrix.rows, matrix.cols);
-        std::vector<NumericalInstability> instabilities;
-        
-        // Инициализация L единичной матрицей
+        long double u_ik;
+        int prev_ind_u_ik = INT_MAX;
+        long double L_insert = 0;
+        long double factor;
+        long double pivot;
         for (int i = 0; i < matrix.rows; ++i) {
             L.csr_data.push_back(1.0);
             L.csr_col_indices.push_back(i);
             L.csr_row_ptr.push_back(i);
         }
         L.csr_row_ptr.push_back(matrix.rows);
-
-        // Копируем исходную матрицу в U
         U.csr_data = matrix.csr_data;
-        U.csr_col_indices = matrix.csr_col_indices;
-        U.csr_row_ptr = matrix.csr_row_ptr;
-
-        // Создаем более эффективную структуру - для каждого шага k 
-        // храним список пар (i, j), где i - строка, j - столбец, которые модифицируются
-        std::vector<std::vector<std::pair<int, int>>> steps_structure(matrix.rows);
-        
-        for (const auto& step : previous_steps) {
-            // Добавляем все шаги, где обрабатывается строка ниже текущей
-            if (step.k < matrix.rows - 1) { // Проверяем, что шаг валидный
-                steps_structure[step.k].push_back({step.i, step.j});
+        L.csr_row_ptr = previous_steps.first.csr_row;
+        L.csr_col_indices = previous_steps.first.csr_col;
+        U.csr_col_indices = previous_steps.second.csr_col;
+        U.csr_row_ptr = previous_steps.second.csr_row;
+        // Идём по структуре и вычисляем элементы
+        // todo написать более подробные коменты
+        for (int i = 0; i < previous_steps.second.data.size(); i++) {
+            if (i == 25)
+                int a = 1 + 1;
+            if (previous_steps.second.data[i].size() == 1) {
+                U.csr_data.erase(U.csr_data.begin() + static_cast<int>(previous_steps.second.data[i][0]));
+                prev_ind_u_ik = INT_MAX;
             }
-        }
-
-        // Выполняем разложение
-        for (int k = 0; k < matrix.rows - 1; ++k) {
-            
-            // Получаем опорный элемент U[k][k]
-            long double pivot = 0;
-            for (int j = U.csr_row_ptr[k]; j < U.csr_row_ptr[k + 1]; ++j) {
-                if (U.csr_col_indices[j] == k) {
-                    pivot = U.csr_data[j];
-                    break;
+            else
+            {
+                if (previous_steps.second.data[i].size() == 2) {
+                    pivot = U.csr_data[static_cast<int>(previous_steps.second.data[i][1])];
+                    U.csr_data.insert(U.csr_data.begin() + static_cast<int>(previous_steps.second.data[i][0]), pivot);
                 }
-            }
-
-            // Если опорный элемент слишком мал, заменяем его безопасным значением
-            if (std::abs(pivot) < 1e-10) {
-                pivot = 1e-10;
-                for (int j = U.csr_row_ptr[k]; j < U.csr_row_ptr[k + 1]; ++j) {
-                    if (U.csr_col_indices[j] == k) {
-                        U.csr_data[j] = pivot;
-                        break;
-                    }
-                }
-                instabilities.emplace_back(k, k, k, pivot, 1e-10);
-            }
-
-            // Создаем отдельные множества для строк и столбцов, которые нужно обработать
-            std::unordered_map<int, bool> rows_to_process;
-            
-            // Добавляем все строки ниже текущей
-            for (int i = k + 1; i < matrix.rows; ++i) {
-                rows_to_process[i] = true;
-            }
-
-            // Добавляем строки из предыдущих шагов
-            for (const auto& step : steps_structure[k]) {
-                rows_to_process[step.first] = true;
-            }
-
-            // Обрабатываем только те строки, которые нужно модифицировать
-            for (const auto& row_pair : rows_to_process) {
-                int i = row_pair.first;
-                
-                // Получаем элемент U[i][k]
-                long double u_ik = 0;
-                for (int j = U.csr_row_ptr[i]; j < U.csr_row_ptr[i + 1]; ++j) {
-                    if (U.csr_col_indices[j] == k) {
-                        u_ik = U.csr_data[j];
-                        break;
-                    }
-                }
-
-                if (std::abs(u_ik) > 1e-10) {
-                    long double factor = u_ik / pivot;
-                    
-                    // Ограничиваем множитель для численной стабильности
-                    if (std::abs(factor) > 1e8) {
-                        factor = (factor > 0) ? 1e8 : -1e8;
-                    }
-                    
-                    // Обновляем строку i в матрице U
-                    for (int j = U.csr_row_ptr[i]; j < U.csr_row_ptr[i + 1]; ++j) {
-                        if (U.csr_col_indices[j] >= k) {
-                            long double u_kj = 0;
-                            for (int m = U.csr_row_ptr[k]; m < U.csr_row_ptr[k + 1]; ++m) {
-                                if (U.csr_col_indices[m] == U.csr_col_indices[j]) {
-                                    u_kj = U.csr_data[m];
-                                    break;
-                                }
-                            }
-                            U.csr_data[j] -= factor * u_kj;
+                else
+                {
+                    if (static_cast<int>(previous_steps.second.data[i][4] == 1)) {
+                        if (prev_ind_u_ik == INT_MAX) {
+                            prev_ind_u_ik = static_cast<int>(previous_steps.second.data[i][2]);
+                            u_ik = U.csr_data[prev_ind_u_ik];
+                            pivot = U.csr_data[static_cast<int>(previous_steps.second.data[i][1])];
+                            factor = u_ik / pivot;
+                            L.csr_data.insert(L.csr_data.begin() + static_cast<int>(previous_steps.first.data[L_insert][0]), factor);
+                            L_insert++;
                         }
+                        if (prev_ind_u_ik != static_cast<int>(previous_steps.second.data[i][2])) {
+                            prev_ind_u_ik = static_cast<int>(previous_steps.second.data[i][2]);
+                            u_ik = U.csr_data[prev_ind_u_ik];
+                            pivot = U.csr_data[static_cast<int>(previous_steps.second.data[i][1])];
+                            factor = u_ik / pivot;
+                            L.csr_data.insert(L.csr_data.begin() + static_cast<int>(previous_steps.first.data[L_insert][0]), factor);
+                            L_insert++;
+                        }
+                        U.csr_data[static_cast<int>(previous_steps.second.data[i][0])] -= factor * U.csr_data[static_cast<int>(previous_steps.second.data[i][3])];
                     }
-
-                    // Добавляем элемент в матрицу L
-                    // Находим позицию для вставки в строке i
-                    int insert_pos = L.csr_row_ptr[i];
-                    while (insert_pos < L.csr_row_ptr[i + 1] && L.csr_col_indices[insert_pos] < k) {
-                        insert_pos++;
-                    }
-
-
-                    // Если элемент уже существует, обновляем его
-                    if (insert_pos < L.csr_row_ptr[i + 1] && L.csr_col_indices[insert_pos] == k) {
-                        L.csr_data[insert_pos] = factor;
-                    } else {
-                        // Вставляем новый элемент
-                        L.csr_data.insert(L.csr_data.begin() + insert_pos, factor);
-                        L.csr_col_indices.insert(L.csr_col_indices.begin() + insert_pos, k);
+                    else
+                    {
+                        if (prev_ind_u_ik == INT_MAX) {
+                            prev_ind_u_ik = static_cast<int>(previous_steps.second.data[i][2]);
+                            u_ik = U.csr_data[prev_ind_u_ik];
+                            pivot = U.csr_data[static_cast<int>(previous_steps.second.data[i][1])];
+                            factor = u_ik / pivot;
+                            L.csr_data.insert(L.csr_data.begin() + static_cast<int>(previous_steps.first.data[L_insert][0]), factor);
+                            L_insert++;
+                        }
+                        if (prev_ind_u_ik != static_cast<int>(previous_steps.second.data[i][2])) {
+                            prev_ind_u_ik = static_cast<int>(previous_steps.second.data[i][2]);
+                            u_ik = U.csr_data[prev_ind_u_ik];
+                            pivot = U.csr_data[static_cast<int>(previous_steps.second.data[i][1])];
+                            factor = u_ik / pivot;
+                            L.csr_data.insert(L.csr_data.begin() + static_cast<int>(previous_steps.first.data[L_insert][0]), factor);
+                            L_insert++;
+                        }
+                        U.csr_data.insert(U.csr_data.begin() + static_cast<int>(previous_steps.second.data[i][0]), -factor * U.csr_data[static_cast<int>(previous_steps.second.data[i][3])]);
                         
-                        // Обновляем указатели на строки
-                        for (int row = i + 1; row <= matrix.rows; ++row) {
-                            L.csr_row_ptr[row]++;
-                        }
                     }
-
                 }
             }
         }
+        return { L, U };
 
-        return {{L, U}, instabilities};
-    }*/
+    }
 
     // Умножение матриц
     Matrix operator*(const Matrix& other) const {
@@ -732,34 +679,34 @@ void testMatrix() {
     // Тест быстрого LU разложения
     std::cout << "\nТест быстрого LU разложения матрицы B:\n";
     start_time = std::chrono::high_resolution_clock::now();
-    //std::pair<std::pair<Matrix, Matrix>, std::vector<NumericalInstability>> fast_result = FastLUDecomposition(B, steps_B);
+    std::pair<Matrix, Matrix> fast_result = FastLUDecomposition(B, result_B.second);
     end_time = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
     std::cout << "Время выполнения быстрого LU разложения: " << duration.count() << " микросекунд\n\n";
     
-    //Matrix& L_fast = fast_result.first.first;
-    //Matrix& U_fast = fast_result.first.second;
+    Matrix& L_fast = fast_result.first;
+    Matrix& U_fast = fast_result.second;
     //const std::vector<NumericalInstability>& instabilities = fast_result.second;
     
     std::cout << "Матрица L (плотный формат):\n";
-    //auto L_dense_fast = L_fast.toDenseFromCSR();
-    //for (const auto& row : L_dense_fast) {
-    //    for (const auto& val : row) {
-    //        std::cout << std::setw(8) << std::fixed << std::setprecision(6) << val << " ";
-    //    }
-    //    std::cout << "\n";
-    //}
+    auto L_dense_fast = L_fast.toDenseFromCSR();
+    for (const auto& row : L_dense_fast) {
+        for (const auto& val : row) {
+            std::cout << std::setw(8) << std::fixed << std::setprecision(6) << val << " ";
+        }
+        std::cout << "\n";
+    }
     std::cout << "\n";
     
     std::cout << "Матрица U (плотный формат):\n";
-    //auto U_dense_fast = U_fast.toDenseFromCSR();
-    //for (const auto& row : U_dense_fast) {
-     //   for (const auto& val : row) {
-     //       std::cout << std::setw(8) << std::fixed << std::setprecision(6) << val << " ";
-     //   }
-     //   std::cout << "\n";
-    //}
-    //std::cout << "\n";
+    auto U_dense_fast = U_fast.toDenseFromCSR();
+    for (const auto& row : U_dense_fast) {
+        for (const auto& val : row) {
+            std::cout << std::setw(8) << std::fixed << std::setprecision(6) << val << " ";
+        }
+        std::cout << "\n";
+    }
+    std::cout << "\n";
 
     /*if (!instabilities.empty()) {
         std::cout << "Обнаружены места численной неустойчивости:\n";
@@ -774,7 +721,7 @@ void testMatrix() {
     }*/
 
     // Проверка L * U = B для быстрого разложения
-    /*L_fast.toLIL();
+    L_fast.toLIL();
     U_fast.toLIL();
     Matrix LU_fast = L_fast * U_fast;
     std::cout << "Результат умножения L * U (быстрое разложение):\n";
@@ -788,7 +735,7 @@ void testMatrix() {
     std::cout << "\n";
 
     std::cout << "Матрицы B и L*U (быстрое разложение) " 
-              << (B == LU_fast ? "совпадают" : "не совпадают") << "\n\n";*/
+              << (B == LU_fast ? "совпадают" : "не совпадают") << "\n\n";
 
     // Создаем матрицу C с такой же структурой как у B
     Matrix C(10, 10);
@@ -817,14 +764,14 @@ void testMatrix() {
     // Быстрое LU разложение матрицы C с использованием структуры B
     std::cout << "Быстрое LU разложение матрицы C (используя структуру B):\n";
     start_time = std::chrono::high_resolution_clock::now();
-    //std::pair<std::pair<Matrix, Matrix>, std::vector<NumericalInstability>> fast_result_C = FastLUDecomposition(C, steps_B);
+    std::pair<Matrix, Matrix> fast_result_C = FastLUDecomposition(C, result_B.second);
     end_time = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
     std::cout << "Время выполнения быстрого LU разложения: " << duration.count() << " микросекунд\n\n";
     
-    /*Matrix& L_fast_C = fast_result_C.first.first;
-    Matrix& U_fast_C = fast_result_C.first.second;
-    const std::vector<NumericalInstability>& instabilities_C = fast_result_C.second;*/
+    Matrix& L_fast_C = fast_result_C.first;
+    Matrix& U_fast_C = fast_result_C.second;
+    //const std::vector<NumericalInstability>& instabilities_C = fast_result_C.second;
 
     // Обычное LU разложение матрицы C
     std::cout << "Обычное LU разложение матрицы C:\n";
@@ -841,7 +788,7 @@ void testMatrix() {
     L_C.toLIL();
     U_C.toLIL();
     Matrix LU_C = L_C * U_C;
-    /*L_fast_C.toLIL();
+    L_fast_C.toLIL();
     U_fast_C.toLIL();
     Matrix LU_fast_C = L_fast_C * U_fast_C;
 
@@ -852,7 +799,7 @@ void testMatrix() {
             std::cout << std::setw(8) << std::fixed << std::setprecision(6) << val << " ";
         }
         std::cout << "\n";
-    }*/
+    }
     std::cout << "\n";
 
     std::cout << "Результат умножения L * U (обычное разложение):\n";
@@ -866,10 +813,10 @@ void testMatrix() {
     std::cout << "\n";
 
     C.toLIL();
-    /*std::cout << "Матрицы C и L*U (быстрое разложение) "
+    std::cout << "Матрицы C и L*U (быстрое разложение) "
               << (C == LU_fast_C ? "совпадают" : "не совпадают") << "\n";
     LU_fast_C.printDense(6);
-    std::cout << "\n";*/
+    std::cout << "\n";
 
     std::cout << "Результат умножения L * U (обычное разложение):\n";
     LU_C.printDense(6);
